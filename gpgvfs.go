@@ -35,9 +35,9 @@ func NewGPGVFS(EncryptedPath string, EncryptionPassphrase []byte) *GPGVFS {
 		panic(err)
 	}
 	if n, err := f.Write([]byte(decoded)); err != nil {
-		fmt.Printf("Unexpected error: %s", err)
+		fmt.Printf("Unexpected error: %s\n", err)
 	} else if n != len(fileContents) {
-		fmt.Printf("Invalid write count: %d", n)
+		fmt.Printf("Invalid write count: %d\n", n)
 	}
 	f.Close()
 
