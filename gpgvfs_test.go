@@ -2,6 +2,7 @@ package gpgvfs
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -11,10 +12,10 @@ import (
 	"github.com/psanford/sqlite3vfs"
 )
 
-func setupEncryptedFile(content []byte) (string, func()) {
+func setupEncryptedFile(content []byte) (string, func(), error) {
 	tmpDir, err := os.MkdirTemp("", "gpgvfs")
 	if err != nil {
-		panic(err)
+		return "", nil, err
 	}
 
 	dbPath := fmt.Sprintf("%s/%s", tmpDir, "test.db")
@@ -22,11 +23,14 @@ func setupEncryptedFile(content []byte) (string, func()) {
 
 	return dbPath, func() {
 		os.RemoveAll(tmpDir)
-	}
+	}, nil
 }
 
 func TestReadEncryptedFileSuccess(t *testing.T) {
-	dbPath, cleanup := setupEncryptedFile(TEST_FILE_ENCRYPTED)
+	dbPath, cleanup, err := setupEncryptedFile(TEST_FILE_ENCRYPTED)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer cleanup()
 
 	contents, err := readEncryptedFile(dbPath, PASSWORD)
@@ -40,25 +44,36 @@ func TestReadEncryptedFileSuccess(t *testing.T) {
 }
 
 func TestReadEncryptedFileError(t *testing.T) {
-	dbPath, cleanup := setupEncryptedFile(TEST_FILE_ENCRYPTED)
+	dbPath, cleanup, err := setupEncryptedFile(TEST_FILE_ENCRYPTED)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer cleanup()
 
-	defer func() {
-		if r := recover(); r == nil || r != "openpgp.ReadMessage: wrong password" {
-			t.Fatalf("Expected panic, got %s", r)
-		}
-	}()
+	_, err = readEncryptedFile(dbPath, []byte("wrong-password"))
+	if err == nil {
+		t.Fatal("Expected error, got nil")
+	}
 
-	readEncryptedFile(dbPath, []byte("wrong-password"))
+	if !errors.Is(err, ErrWrongPassword) {
+		t.Fatalf("Expected error %s, got %s", ErrWrongPassword, err)
+	}
 }
 
 func TestNewGPGVFS(t *testing.T) {
-	dbPath, cleanup := setupEncryptedFile(TEST_DB_ENCRYPTED)
+	dbPath, cleanup, err := setupEncryptedFile(TEST_DB_ENCRYPTED)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer cleanup()
 
 	// create vfs
-	vfs := NewGPGVFS(dbPath, PASSWORD)
-	err := sqlite3vfs.RegisterVFS("gpgvfs", vfs)
+	vfs, err := NewGPGVFS(dbPath, PASSWORD)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = sqlite3vfs.RegisterVFS("gpgvfs", vfs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,6 +102,9 @@ func TestNewGPGVFS(t *testing.T) {
 	for rows.Next() {
 		var row rowType
 		err = rows.Scan(&row.Id, &row.Name)
+		if err != nil {
+			t.Fatalf("Unexpected error: %s", err)
+		}
 		result = append(result, row)
 	}
 
