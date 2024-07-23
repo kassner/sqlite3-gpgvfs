@@ -120,3 +120,29 @@ func TestNewGPGVFS(t *testing.T) {
 		t.Fatalf("Expected result[1]={2 test2}, got %v", result[1])
 	}
 }
+
+func TestInitializeFile(t *testing.T) {
+	// setup temp dir
+	tmpDir, err := os.MkdirTemp("", "gpgvfs")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer os.RemoveAll(tmpDir)
+	path := fmt.Sprintf("%s/%s", tmpDir, "test.db")
+
+	// create vfs
+	err = InitializeFile(path, PASSWORD)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if size := info.Size(); size < 4096 {
+		t.Fatalf("Expected file to be over 4KB, got %d bytes", size)
+	}
+}

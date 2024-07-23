@@ -20,6 +20,15 @@ type GPGVFS struct {
 
 var ErrWrongPassword = errors.New("openpgp.ReadMessage: wrong password")
 
+func InitializeFile(path string, password []byte) error {
+	vfs, err := newGPGVFSFromContent([]byte(sqliteEmptyFile))
+	if err != nil {
+		return err
+	}
+
+	return vfs.Close(path, password)
+}
+
 func NewGPGVFS(path string, password []byte) (*GPGVFS, error) {
 	fileContents, err := readEncryptedFile(path, password)
 	if err != nil {
