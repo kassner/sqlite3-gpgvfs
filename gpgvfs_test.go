@@ -80,7 +80,7 @@ func TestNewGPGVFS(t *testing.T) {
 	defer vfs.Close(dbPath, PASSWORD)
 
 	// create connection
-	db, err := sql.Open("sqlite3", "/data/test.db?vfs=gpgvfs")
+	db, err := sql.Open("sqlite3", DecryptedPath+"?vfs=gpgvfs")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,7 +1,7 @@
 package gpgvfs
 
 import (
-	"os"
+	"io"
 	"sync/atomic"
 
 	"github.com/blang/vfs"
@@ -9,7 +9,6 @@ import (
 )
 
 type gpgFile struct {
-	Name      string
 	lockCount int64
 	f         vfs.File
 }
@@ -18,12 +17,16 @@ func (tf *gpgFile) Close() error {
 	return tf.f.Close()
 }
 
-func (tf *gpgFile) ReadAt(p []byte, off int64) (n int, err error) {
+func (tf *gpgFile) ReadAt(p []byte, off int64) (int, error) {
 	return tf.f.ReadAt(p, off)
 }
 
-func (tf *gpgFile) WriteAt(b []byte, off int64) (n int, err error) {
-	tf.f.Seek(off, os.SEEK_SET)
+func (tf *gpgFile) WriteAt(b []byte, off int64) (int, error) {
+	_, err := tf.f.Seek(off, io.SeekStart)
+	if err != nil {
+		panic(err)
+	}
+
 	return tf.f.Write(b)
 }
 
@@ -36,13 +39,21 @@ func (tf *gpgFile) Sync(flag sqlite3vfs.SyncType) error {
 }
 
 func (tf *gpgFile) FileSize() (int64, error) {
-	cur, _ := tf.f.Seek(0, os.SEEK_CUR)
-	end, err := tf.f.Seek(0, os.SEEK_END)
+	cur, err := tf.f.Seek(0, io.SeekCurrent)
 	if err != nil {
 		return 0, err
 	}
 
-	tf.f.Seek(cur, os.SEEK_SET)
+	end, err := tf.f.Seek(0, io.SeekEnd)
+	if err != nil {
+		return 0, err
+	}
+
+	_, err = tf.f.Seek(cur, io.SeekStart)
+	if err != nil {
+		panic(err)
+	}
+
 	return end, nil
 }
 
@@ -50,6 +61,7 @@ func (tf *gpgFile) Lock(elock sqlite3vfs.LockType) error {
 	if elock == sqlite3vfs.LockNone {
 		return nil
 	}
+
 	atomic.AddInt64(&tf.lockCount, 1)
 	return nil
 }
@@ -58,6 +70,7 @@ func (tf *gpgFile) Unlock(elock sqlite3vfs.LockType) error {
 	if elock == sqlite3vfs.LockNone {
 		return nil
 	}
+
 	atomic.AddInt64(&tf.lockCount, -1)
 	return nil
 }

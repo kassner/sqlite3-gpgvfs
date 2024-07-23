@@ -12,50 +12,56 @@ import (
 	"golang.org/x/crypto/openpgp"
 )
 
+const DecryptedPath = "/data/file.db"
+
 type GPGVFS struct {
-	EncryptedPath string
-	memfs         *memfs.MemFS
+	memfs *memfs.MemFS
 }
 
 var ErrWrongPassword = errors.New("openpgp.ReadMessage: wrong password")
 
-func NewGPGVFS(EncryptedPath string, EncryptionPassphrase []byte) (*GPGVFS, error) {
-	memfs := memfs.Create()
-	memfs.Mkdir("/data", 0777)
-
-	fileContents, err := readEncryptedFile(EncryptedPath, EncryptionPassphrase)
+func NewGPGVFS(path string, password []byte) (*GPGVFS, error) {
+	fileContents, err := readEncryptedFile(path, password)
 	if err != nil {
 		return nil, err
 	}
 
-	decoded := make([]byte, base64.StdEncoding.DecodedLen(len(fileContents)))
-	_, err = base64.StdEncoding.Decode(decoded, fileContents)
-	if err != nil {
-		return nil, err
-	}
-
-	// copy contents
-	f, err := memfs.OpenFile("/data/test.db", os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0777)
-	if err != nil {
-		return nil, err
-	}
-
-	if n, err := f.Write([]byte(decoded)); err != nil {
-		fmt.Printf("Unexpected error: %s\n", err)
-	} else if n != len(decoded) {
-		fmt.Printf("Invalid write count: %d\n", n)
-	}
-
-	f.Close()
-
-	return &GPGVFS{
-		EncryptedPath: "/data/test.db",
-		memfs:         memfs,
-	}, nil
+	return newGPGVFSFromContent(fileContents)
 }
 
-func readEncryptedFile(EncryptedPath string, EncryptionPassphrase []byte) ([]byte, error) {
-	dbFile, err := os.Open(EncryptedPath)
+func newGPGVFSFromContent(contentB64Encoded []byte) (*GPGVFS, error) {
+	decoded := make([]byte, base64.StdEncoding.DecodedLen(len(contentB64Encoded)))
+	_, err := base64.StdEncoding.Decode(decoded, contentB64Encoded)
+	if err != nil {
+		return nil, err
+	}
+
+	memfs := memfs.Create()
+	memfs.Mkdir("/data", 0777)
+	f, err := memfs.OpenFile(DecryptedPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0777)
+	if err != nil {
+		return nil, err
+	}
+
+	n, err := f.Write([]byte(decoded))
+	if err != nil {
+		fmt.Printf("Unexpected error: %s\n", err)
+		// @TODO return err
+	} else if n != len(decoded) {
+		fmt.Printf("Invalid write count: %d\n", n)
+		// @TODO return err
+	}
+
+	err = f.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	return &GPGVFS{memfs: memfs}, nil
+}
+
+func readEncryptedFile(path string, password []byte) ([]byte, error) {
+	dbFile, err := os.Open(path)
 
 	if err != nil {
 		return nil, err
@@ -69,7 +75,7 @@ func readEncryptedFile(EncryptedPath string, EncryptionPassphrase []byte) ([]byt
 		}
 
 		attempts = attempts + 1
-		return EncryptionPassphrase, nil
+		return password, nil
 	}, nil)
 
 	if err != nil {
@@ -79,37 +85,37 @@ func readEncryptedFile(EncryptedPath string, EncryptionPassphrase []byte) ([]byt
 	return io.ReadAll(md.UnverifiedBody)
 }
 
-func (gpgvfs *GPGVFS) Open(name string, flags sqlite3vfs.OpenFlag) (sqlite3vfs.File, sqlite3vfs.OpenFlag, error) {
-	f, err := gpgvfs.memfs.OpenFile(name, os.O_RDWR|os.O_CREATE, 0777)
+func (gpgvfs *GPGVFS) Open(path string, flags sqlite3vfs.OpenFlag) (sqlite3vfs.File, sqlite3vfs.OpenFlag, error) {
+	f, err := gpgvfs.memfs.OpenFile(path, os.O_RDWR|os.O_CREATE, 0777)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	return &gpgFile{
-		Name: name,
-		f:    f,
-	}, flags, nil
+	return &gpgFile{f: f}, flags, nil
 }
 
-func (gpgvfs *GPGVFS) Close(name string, EncryptionPassphrase []byte) error {
-	fileinfo, err := gpgvfs.memfs.Stat("/data/test.db")
+func (gpgvfs *GPGVFS) Close(path string, EncryptionPassphrase []byte) error {
+	fileinfo, err := gpgvfs.memfs.Stat(DecryptedPath)
 	if err != nil {
 		return err
 	}
 
-	f, err := gpgvfs.memfs.OpenFile("/data/test.db", os.O_RDONLY, 0644)
+	f, err := gpgvfs.memfs.OpenFile(DecryptedPath, os.O_RDONLY, 0644)
 	if err != nil {
 		return err
 	}
 
 	size := fileinfo.Size()
 	p := make([]byte, size)
-	f.ReadAt(p, 0)
+	_, err = f.ReadAt(p, 0)
+	if err != nil {
+		panic(err)
+	}
 
 	data := make([]byte, base64.StdEncoding.EncodedLen(len(p)))
 	base64.StdEncoding.Encode(data, p)
 
-	dst, err := os.Create(name)
+	dst, err := os.Create(path)
 	if err != nil {
 		return err
 	}
@@ -129,28 +135,24 @@ func (gpgvfs *GPGVFS) Close(name string, EncryptionPassphrase []byte) error {
 		return err
 	}
 
-	err = dst.Close()
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return dst.Close()
 }
 
-func (gpgvfs *GPGVFS) Delete(name string, dirSync bool) error {
-	return gpgvfs.memfs.Remove(name)
+func (gpgvfs *GPGVFS) Delete(path string, dirSync bool) error {
+	return gpgvfs.memfs.Remove(path)
 }
 
-func (gpgvfs *GPGVFS) Access(name string, flag sqlite3vfs.AccessFlag) (bool, error) {
-	_, err := gpgvfs.memfs.Stat(name)
+func (gpgvfs *GPGVFS) Access(path string, flag sqlite3vfs.AccessFlag) (bool, error) {
+	_, err := gpgvfs.memfs.Stat(path)
 
 	if err != nil {
+		// @TODO return err
 		return false, nil
 	}
 
 	return true, nil
 }
 
-func (gpgvfs *GPGVFS) FullPathname(name string) string {
-	return name
+func (gpgvfs *GPGVFS) FullPathname(path string) string {
+	return path
 }
